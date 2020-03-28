@@ -5,33 +5,62 @@ on:
     tags:
       - "v*"
 
-env:
-  BIN_LINUX: dafu-report-linux-amd64
-
 jobs:
-  build_linux:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        target:
+          [x86_64-unknown-linux-gnu, x86_64-apple-darwin, x86_64-pc-windows-gnu]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v2
+      - name: Cache cargo registry
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo index
+        uses: actions/cache@v1
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      - name: Cache cargo build
+        uses: actions/cache@v1
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
       - name: Build
-        run: cargo build --release
-      - shell: bash
-        run: |
-          tar zcv -f ${{env.BIN_LINUX}}.tar.gz -C target/release/ dafu-report
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target=${{ matrix.target }}
+          use-cross: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
+      - run: |
+          zip -Dj  dafu-report-${{ matrix.target }} target/${{ matrix.target }}/release/dafu-report{,.exe}
       - uses: actions/upload-artifact@v1
         with:
-          name: ${{env.BIN_LINUX}}
-          path: ${{env.BIN_LINUX}}.tar.gz
+          name: build-${{ matrix.target }}
+          path: dafu-report-${{ matrix.target }}.zip
 
   create_release:
-    needs: [build_linux]
+    needs: [build]
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/download-artifact@v1
-        with:
-          name: ${{env.BIN_LINUX}}
       - uses: actions/create-release@latest
         id: create_release
         env:
@@ -41,11 +70,38 @@ jobs:
           release_name: Release ${{ github.ref }}
           draft: false
           prerelease: false
+      - run: |
+          echo '${{ steps.create_release.outputs.upload_url }}' > release_upload_url.txt
+      - uses: actions/upload-artifact@v1
+        with:
+          name: create_release
+          path: release_upload_url.txt
+
+  upload_release:
+    needs: [create_release]
+
+    strategy:
+      matrix:
+        target:
+          [x86_64-unknown-linux-gnu, x86_64-apple-darwin, x86_64-pc-windows-gnu]
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v1
+        with:
+          name: create_release
+      - id: upload_url
+        run: |
+          echo "::set-output name=upload_url::$(cat create_release/release_upload_url.txt)"
+      - uses: actions/download-artifact@v1
+        with:
+          name: build-${{ matrix.target }}
       - uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ${{env.BIN_LINUX}}/${{env.BIN_LINUX}}.tar.gz
-          asset_name: ${{env.BIN_LINUX}}
-          asset_content_type: application/gzip
+          upload_url: ${{ steps.upload_url.outputs.upload_url }}
+          asset_path: build-${{ matrix.target }}/dafu-report-${{ matrix.target }}.zip
+          asset_name: dafu-report-${{ matrix.target }}.zip
+          asset_content_type: application/zip
