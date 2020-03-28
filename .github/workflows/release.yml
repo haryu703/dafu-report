@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  BIN_LINUX: dafu-report-linux-amd64
+
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build
+        run: cargo build --release
+      - shell: bash
+        run: |
+          tar zcv -f ${{env.BIN_LINUX}}.tar.gz -C target/release/ dafu-report
+      - uses: actions/upload-artifact@v1
+        with:
+          name: ${{env.BIN_LINUX}}
+          path: ${{env.BIN_LINUX}}.tar.gz
+
+  create_release:
+    needs: [build_linux]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v1
+        with:
+          name: ${{env.BIN_LINUX}}
+      - uses: actions/create-release@latest
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref }}
+          draft: false
+          prerelease: false
+      - uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ${{env.BIN_LINUX}}/${{env.BIN_LINUX}}.tar.gz
+          asset_name: ${{env.BIN_LINUX}}
+          asset_content_type: application/gzip
